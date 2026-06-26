@@ -64,7 +64,7 @@ export function continueKb(length: number, source: string, dig: string) {
 export function resultKb(username: string, length: number, source: string, dig: string) {
   return {
     inline_keyboard: [
-      [{ text: "🔗 Открыть", url: `{{https://t.me/${username}}}` }],
+      [{ text: "🔗 Открыть", url: `https://t.me/${username}` }],
       [
         { text: "⏭ Ещё", callback_data: `go:${length}:${source}:${dig}` },
         { text: "✖️ Закрыть", callback_data: "close" },

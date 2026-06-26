@@ -9,7 +9,7 @@ export async function checkTelegram(username: string): Promise<"free" | "taken">
     const res = await fetch(`https://t.me/${username}`, { headers: { "User-Agent": UA } });
     if (res.status === 404) return "free";
     const html = await res.text();
-    // Эти классы рендерятся только когда есть реальный аккаунт (CSS t.me внешний).
+    // Эти классы рендерятся только когда есть реальный аккаунт.
     const occupied =
       html.includes("tgme_page_title") ||
       html.includes("tgme_page_extra") ||

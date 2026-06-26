@@ -40,7 +40,7 @@ const SEARCH_TEXT = "💎 <b>ПОИСК ЮЗЕРНЕЙМА</b>\n\n♾ Попыт
 
 async function tg(env: Env, method: string, payload: Record<string, unknown>): Promise<any> {
   try {
-    const res = await fetch(`{{https://api.telegram.org/bot${env.BOT_TOKEN}}}/${method}`, {
+    const res = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -124,7 +124,7 @@ async function handleMessage(msg: any, env: Env, origin: string): Promise<void> 
     case "👥 Рефералы": {
       const me = await tg(env, "getMe", {});
       const un = me?.result?.username;
-      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\n{{https://t.me/${un}}}?start=ref${msg.from.id}` });
+      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\nhttps://t.me/${un}?start=ref${msg.from.id}` });
       return;
     }
     case "🛟 Поддержка":
@@ -225,7 +225,6 @@ async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
       parse_mode: "HTML",
       text: `🔎 Автопоиск…\nПроверено: <b>${total}</b>\nПоследний: <code>@${last}</code>`,
     });
-    // Пытаемся продолжить автоматически; если самовызов недоступен — покажем кнопку.
     const next: Job = { ...job, attempt: job.attempt + 1, checked: total };
     let chained = false;
     try {
