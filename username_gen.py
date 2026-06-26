@@ -1,39 +1,32 @@
+"""
+Локальные резервные списки реальных слов (фолбэк, если Datamuse недоступен)
++ небольшие утилиты для генерации ников из слов.
+"""
 import random
-import string
 
-VOWELS = "aeiou"
-CONSONANTS = "bcdfghjklmnpqrstvwxyz"
-
-
-def _pronounceable(length: int) -> str:
-    """Генерирует «читаемый» ник, чередуя согласные/гласные."""
-    out = []
-    start_vowel = random.random() < 0.5
-    for i in range(length):
-        if (i % 2 == 0) ^ start_vowel:
-            out.append(random.choice(CONSONANTS))
-        else:
-            out.append(random.choice(VOWELS))
-    return "".join(out)
-
-
-def generate(length: int, with_digits: bool = False, pronounceable: bool = True) -> str:
-    # Telegram: ник должен начинаться с буквы
-    if with_digits:
-        first = random.choice(string.ascii_lowercase)
-        rest_pool = string.ascii_lowercase + string.digits
-        rest = "".join(random.choice(rest_pool) for _ in range(length - 1))
-        return first + rest
-    if pronounceable:
-        return _pronounceable(length)
-    return "".join(random.choice(string.ascii_lowercase) for _ in range(length))
+# Резервные словари на случай, если API недоступен или вернул пусто
+FALLBACK_WORDS = {
+    4: [
+        "wolf", "moon", "star", "fire", "gold", "king", "luck", "neon",
+        "echo", "void", "lion", "rose", "snow", "rain", "wave", "jade",
+    ],
+    5: [
+        "apple", "brave", "crane", "drift", "eagle", "flame", "ghost", "honey",
+        "ivory", "jolly", "lemon", "mango", "noble", "ocean", "pearl", "raven",
+        "storm", "tiger", "vivid", "whale", "amber", "cloud", "dream", "frost",
+        "glide", "spark", "swift", "lunar", "pixel", "comet", "ninja", "blaze",
+        "prism", "vapor", "zebra", "maple", "river", "solar", "orbit", "ember",
+    ],
+    6: [
+        "bright", "castle", "dragon", "falcon", "garden", "hunter", "island", "jungle",
+        "knight", "legend", "marble", "nimble", "orchid", "pirate", "quartz", "rocket",
+        "silver", "velvet", "wisdom", "zenith", "cosmic", "frozen", "golden", "hidden",
+        "indigo", "meteor", "nebula", "oxygen", "photon", "quasar", "shadow", "temple",
+        "violet", "winter", "cipher", "pulsar", "cobalt", "plasma", "ardent", "zephyr",
+    ],
+}
 
 
-def generate_batch(length: int, count: int, with_digits: bool = False) -> list[str]:
-    seen, batch = set(), []
-    while len(batch) < count:
-        u = generate(length, with_digits)
-        if u not in seen:
-            seen.add(u)
-            batch.append(u)
-    return batch
+def with_digit(word: str) -> str:
+    """Добавляет одну случайную цифру в конец слова (для режима «с цифрами»)."""
+    return word + str(random.randint(0, 9))
