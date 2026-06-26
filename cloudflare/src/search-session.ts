@@ -1,10 +1,11 @@
-// Durable Object — движок автопоиска.
-// Почему так: Cloudflare ограничивает «воркер вызывает сам себя» 32 вызовами на одну
-// изначальную сессию — после этого цепочка падает. Durable Object + Alarms лишён этого
-// ограничения: объект делает порцию проверок, ставит себе будильник и просыпается снова.
-// У alarm'ов гарантия выполнения (at-least-once) и авто-ретраи.
-// Каждый поиск — свой отдельный объект (ключ чат:сообщение), поэтому параллельные
-// поиски не делят состояние и не мешают друг другу.
+// Durable Object — движок автопоиска (надёжный фон через Alarms).
+//
+// Уроки, оплаченные кровью:
+//  • «Воркер вызывает сам себя» ограничен 32 вызовами — поэтому Durable Object + Alarms.
+//  • Free-план: 10ms CPU на вызов; перебор = фатальная ошибка 1102. Поэтому круги МАЛЕНЬКИЕ
+//    и HTML сканируется частично (см. checker.ts).
+//  • alarm() ретраится только 6 раз и сдаётся — поэтому ловим ошибки и сами планируем следующий круг.
+//  • Каждый поиск — свой объект (ключ чат:сообщение), параллельные поиски не мешают друг другу.
 
 import { DurableObject } from "cloudflare:workers";
 import { randBatch, dictBatch } from "./words";
@@ -14,11 +15,11 @@ import { continueKb, resultKb } from "./keyboards";
 
 const API = "https://api.telegram.org/bot";
 
-// Размер одного круга (держим под лимитом запросов на одно срабатывание alarm).
-const PER_ROUND_RAND = 36; // рандом = 1 запрос/ник
-const PER_ROUND_DICT = 18; // словарь = 2 запроса/ник (t.me + Fragment)
-const CHUNK = 6;
-const MAX_ROUNDS = 400; // теперь можно много — alarm'ы надёжны
+// Маленький круг = мало CPU и запросов на одно срабатывание alarm.
+const PER_ROUND_RAND = 14; // рандом = 1 запрос/ник
+const PER_ROUND_DICT = 8; // словарь = до 2 запросов/ник (t.me + Fragment)
+const CHUNK = 4;
+const MAX_ROUNDS = 800; // alarm'ы надёжны — можно много маленьких кругов
 
 export type Job = {
   chatId: number;
@@ -51,18 +52,32 @@ async function tg(token: string, method: string, payload: Record<string, unknown
 }
 
 export class SearchSession extends DurableObject<DoEnv> {
-  // Старт новой сессии поиска: сохраняем задание и взводим будильник.
+  // Старт новой сессии поиска.
   async start(job: Job): Promise<void> {
     await this.ctx.storage.put("job", job);
     await this.ctx.storage.setAlarm(Date.now() + 50);
   }
 
-  // Один круг поиска.
+  // Срабатывание будильника: один круг. Обёрнуто в try/catch, чтобы разовая
+  // сетевая ошибка не убивала поиск (просто планируем следующий круг).
   async alarm(): Promise<void> {
     const job = await this.ctx.storage.get<Job>("job");
     if (!job) return;
-    const token = this.env.BOT_TOKEN;
+    try {
+      await this.runRound(job);
+    } catch (_) {
+      if (job.attempt < MAX_ROUNDS) {
+        const next: Job = { ...job, attempt: job.attempt + 1 };
+        await this.ctx.storage.put("job", next);
+        await this.ctx.storage.setAlarm(Date.now() + 2000);
+      } else {
+        await this.ctx.storage.deleteAll();
+      }
+    }
+  }
 
+  private async runRound(job: Job): Promise<void> {
+    const token = this.env.BOT_TOKEN;
     const isRand = job.source === "rand";
     const deep = !isRand;
     const perRound = isRand ? PER_ROUND_RAND : PER_ROUND_DICT;
@@ -78,7 +93,7 @@ export class SearchSession extends DurableObject<DoEnv> {
         chat_id: job.chatId,
         message_id: job.messageId,
         parse_mode: "HTML",
-        text: `🔎 <b>Автопоиск</b> · ${srcLabel}\n\n⏳ Проверяю партию: <code>@${batch[0]}</code> …\nВсего проверено: <b>${job.checked}</b>`,
+        text: `🔎 <b>Автопоиск</b> · ${srcLabel}\n\n⏳ Проверяю: <code>@${batch[0]}</code> …\nВсего проверено: <b>${job.checked}</b>`,
       });
     }
 
@@ -111,11 +126,11 @@ export class SearchSession extends DurableObject<DoEnv> {
       return;
     }
 
-    // Не нашли — ставим следующий круг через будильник.
+    // Не нашли — следующий круг через будильник.
     if (job.attempt < MAX_ROUNDS && batch.length > 0) {
       const next: Job = { ...job, attempt: job.attempt + 1, checked: total };
       await this.ctx.storage.put("job", next);
-      await this.ctx.storage.setAlarm(Date.now() + 400);
+      await this.ctx.storage.setAlarm(Date.now() + 300);
       return;
     }
 
