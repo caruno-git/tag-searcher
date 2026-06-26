@@ -1,34 +1,25 @@
-import { mainMenu, lengthMenu, sourceMenu, digitsMenu, continueKb, resultKb } from "./keyboards";
-import { randBatch, dictBatch, wordsByMask, shuffle } from "./words";
+import { mainMenu, lengthMenu, sourceMenu, digitsMenu, resultKb } from "./keyboards";
+import { wordsByMask, shuffle } from "./words";
 import { isFree } from "./checker";
 import { liquidity } from "./rating";
+import { SearchSession, type Job } from "./search-session";
+
+// Экспорт класса Durable Object обязателен для wrangler.
+export { SearchSession };
 
 export interface Env {
   BOT_TOKEN: string;
   WEBHOOK_SECRET?: string;
   TRAPS: KVNamespace;
-  SELF: Fetcher; // service binding на самого себя
+  SEARCH: DurableObjectNamespace<SearchSession>;
 }
 
 const API = "https://api.telegram.org/bot";
 const TME = "https://t.me/";
 
-// Лимит Cloudflare — 50 сетевых запросов на один запуск.
-// Словарь = 2 запроса/ник (t.me + Fragment), рандом = 1. Держим круг под ~44.
-const PER_ROUND_RAND = 36; // 36 + ~6 обновлений + 1 самозапуск ≈ 43
-const PER_ROUND_DICT = 18; // 1 слова + 18×2 + ~3 + 1 ≈ 41
-const CHUNK = 6; // параллельных проверок за раз
-const MAX_ROUNDS = 80; // предохранитель от бесконечного цикла
-
-type Job = {
-  chatId: number;
-  messageId: number;
-  length: number;
-  source: string; // "dict" | "rand"
-  withDigits: boolean;
-  attempt: number;
-  checked: number;
-};
+// Для разовой проверки по маске (один запуск, без фона).
+const MASK_LIMIT = 18;
+const CHUNK = 6;
 
 const START_TEXT =
   "👁 <b>Tag Searcher</b> — поиск свободных юзернеймов\n\n" +
@@ -58,26 +49,9 @@ async function tg(env: Env, method: string, payload: Record<string, unknown>): P
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(req.url);
     if (req.method === "GET") return new Response("tag-searcher worker OK");
     if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-    // Внутреннее продолжение поиска (вызывается через env.SELF).
-    if (url.pathname === "/__continue") {
-      if ((req.headers.get("x-internal-secret") ?? "") !== (env.WEBHOOK_SECRET ?? "")) {
-        return new Response("forbidden", { status: 403 });
-      }
-      let job: Job;
-      try {
-        job = (await req.json()) as Job;
-      } catch (_) {
-        return new Response("bad request", { status: 400 });
-      }
-      ctx.waitUntil(searchRound(env, job).catch((e) => console.error("round", e)));
-      return new Response("OK");
-    }
-
-    // Telegram webhook (корень)
     if (env.WEBHOOK_SECRET) {
       const s = req.headers.get("x-telegram-bot-api-secret-token");
       if (s !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
@@ -179,113 +153,31 @@ async function handleCallback(cq: any, env: Env): Promise<void> {
   if (data.startsWith("go:")) {
     const [, len, source, digFlag] = data.split(":");
     const status = await tg(env, "sendMessage", { chat_id: chatId, text: "🔎 Запускаю автопоиск…" });
+    const messageId2 = status?.result?.message_id;
+    if (!messageId2) return;
     const job: Job = {
       chatId,
-      messageId: status?.result?.message_id,
+      messageId: messageId2,
       length: parseInt(len, 10),
       source,
       withDigits: digFlag === "dig",
       attempt: 1,
       checked: 0,
     };
-    if (job.messageId) await searchRound(env, job);
+    const id = env.SEARCH.idFromName(`${chatId}:${messageId2}`);
+    const stub = env.SEARCH.get(id);
+    await stub.start(job);
   }
 }
 
-// Один круг автопоиска — проверяем пачками, показывая живой прогресс.
-async function searchRound(env: Env, job: Job): Promise<void> {
-  const isRand = job.source === "rand";
-  const deep = !isRand;
-  const perRound = isRand ? PER_ROUND_RAND : PER_ROUND_DICT;
-  const batch = isRand
-    ? randBatch(job.length, job.withDigits, perRound)
-    : await dictBatch(job.length, job.withDigits, perRound);
-
-  const srcLabel = isRand ? "🎲 рандом" : "📖 словарь";
-  let found: string | null = null;
-  let localChecked = 0;
-  let last = "";
-  for (let i = 0; i < batch.length && !found; i += CHUNK) {
-    const slice = batch.slice(i, i + CHUNK);
-    last = slice[slice.length - 1];
-    await tg(env, "editMessageText", {
-      chat_id: job.chatId,
-      message_id: job.messageId,
-      parse_mode: "HTML",
-      text: `🔎 <b>Автопоиск</b> · ${srcLabel}\n\n⏳ Проверяю: <code>@${last}</code>\nПроверено: <b>${job.checked + i}</b>`,
-    });
-    const results = await Promise.all(
-      slice.map(async (c) => ({ c, free: await isFree(c, deep) })),
-    );
-    localChecked += slice.length;
-    const hit = results.find((r) => r.free);
-    if (hit) found = hit.c;
-  }
-  const total = job.checked + localChecked;
-
-  if (found) {
-    await finalizeFound(env, job, found);
-    return;
-  }
-
-  const dig = job.withDigits ? "dig" : "nodig";
-
-  if (job.attempt < MAX_ROUNDS && batch.length > 0) {
-    const next: Job = { ...job, attempt: job.attempt + 1, checked: total };
-    let chained = false;
-    try {
-      const r = await env.SELF.fetch(
-        new Request("https://self/__continue", {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-internal-secret": env.WEBHOOK_SECRET ?? "" },
-          body: JSON.stringify(next),
-        }),
-      );
-      chained = r.ok;
-    } catch (_) {
-      chained = false;
-    }
-    if (!chained) {
-      await tg(env, "editMessageText", {
-        chat_id: job.chatId,
-        message_id: job.messageId,
-        parse_mode: "HTML",
-        reply_markup: continueKb(job.length, job.source, dig),
-        text: `🔎 Проверено ${total} — свободных пока нет.\nЖми, чтобы продолжить 👇`,
-      });
-    }
-    return;
-  }
-
-  await tg(env, "editMessageText", {
-    chat_id: job.chatId,
-    message_id: job.messageId,
-    parse_mode: "HTML",
-    reply_markup: continueKb(job.length, job.source, dig),
-    text: `😕 Проверил ${total} ников — свободных пока нет.\nПопробуй «с цифрами» или рандом — там свободных много 👇`,
-  });
-}
-
-async function finalizeFound(env: Env, job: Job, found: string): Promise<void> {
-  const [score, label] = liquidity(found);
-  const dig = job.withDigits ? "dig" : "nodig";
-  const srcLabel = job.source === "rand" ? "случайные буквы" : "реальные слова";
-  await tg(env, "editMessageText", {
-    chat_id: job.chatId,
-    message_id: job.messageId,
-    parse_mode: "HTML",
-    reply_markup: resultKb(found, job.length, job.source, dig),
-    text: `✅ <b>НИК НАЙДЕН!</b>\n\n┌ <code>@${found}</code>\n└ ${srcLabel} · ${found.length} симв.\n\n├ Ликвидность — ${score}/10\n├ Оценка — ${label}\n└ ⚡ Свободен`,
-  });
-}
-
+// Разовая проверка по маске — одна пачка, в пределах лимита запросов.
 async function handleMask(mask: string, chatId: number, env: Env): Promise<void> {
   let candidates = await wordsByMask(mask);
   if (!candidates.length) {
     await tg(env, "sendMessage", { chat_id: chatId, text: "😕 По этой маске реальных слов не нашлось." });
     return;
   }
-  candidates = shuffle(candidates).slice(0, PER_ROUND_DICT);
+  candidates = shuffle(candidates).slice(0, MASK_LIMIT);
   const status = await tg(env, "sendMessage", { chat_id: chatId, text: "⏳ Проверяю слова по маске…" });
   const messageId = status?.result?.message_id;
   let found: string | null = null;

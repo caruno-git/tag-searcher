@@ -7,11 +7,15 @@ compatibility_date = "2024-09-23"
 binding = "TRAPS"
 id = "a848abd92dd64ce8ab1de6f850586e27"
 
-# Service binding на самого себя — чтобы воркер мог запускать следующий круг поиска
-# как новый запуск со свежим лимитом запросов (обход ошибки 1042).
-[[services]]
-binding = "SELF"
-service = "tag-searcher"
+# Durable Object — движок автопоиска. Каждая сессия поиска живёт в своём объекте
+# и будит себя alarm'ом каждый круг (надёжно, с ретраями, без лимита 32 вызовов).
+[[durable_objects.bindings]]
+name = "SEARCH"
+class_name = "SearchSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SearchSession"]
 
 # Cron: проверяем ловушки каждые 2 минуты
 [triggers]
