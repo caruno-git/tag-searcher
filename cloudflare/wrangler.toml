@@ -1,0 +1,17 @@
+name = "tag-searcher"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# KV для хранения «ловушек». Создай: wrangler kv namespace create TRAPS
+# и вставь полученный id ниже.
+[[kv_namespaces]]
+binding = "TRAPS"
+id = "REPLACE_WITH_YOUR_KV_ID"
+
+# Cron: проверяем ловушки каждые 2 минуты
+[triggers]
+crons = ["*/2 * * * *"]
+
+# Секреты (не хранить в файле!):
+#   wrangler secret put BOT_TOKEN
+#   wrangler secret put WEBHOOK_SECRET

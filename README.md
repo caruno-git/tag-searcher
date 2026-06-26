@@ -4,21 +4,25 @@
 
 > Открытая сборка без Premium-подписки — все функции (5/6 букв, фильтр по маске, ловушка, безлимитный поиск) доступны бесплатно.
 
-## Главное отличие
-Ники подбираются из **реальных словарных слов** через бесплатный **Datamuse API**, а не из случайных букв.
+Ники подбираются из **реальных словарных слов** через бесплатный **Datamuse API**.
 
-## Возможности
-- \U0001F50D Поиск свободных ников из реальных слов 5 и 6 букв (с цифрами / без)
-- \U0001F50E Фильтр по маске (`a?b?c`) — реальные слова по шаблону
-- \U0001F514 Ловушка на ник (`/trap username`)
-- \U0001F4CA Оценка ликвидности ника 1..10
+## Две версии
+
+### 1. Python (VPS / Docker) — корень репо
+Максимальная точность: проверка Telegram через **MTProto** (Telethon) + Fragment.
+- `bot.py`, `checker.py`, `wordsource.py`, `rating.py`, `keyboards.py`, `config.py`
+- Запуск: `pip install -r requirements.txt && python bot.py` (см. ниже).
+
+### 2. Cloudflare Workers (serverless) — папка [`cloudflare/`](cloudflare/)
+Без сервера: webhook + KV + Cron. Проверка Telegram через HTTP (`t.me` + Fragment), т.к. MTProto в Workers недоступен.
+См. [`cloudflare/README.md`](cloudflare/README.md).
 
 ## Принцип работы
-- **Словарь** — Datamuse API (`sp=?????` по длине, `sp=a?b?c` по маске, `md=f` для частотности). Без ключа, до 100k запросов/день. Если API недоступен — локальный фолбэк-словарь.
-- **Telegram** — MTProto-метод `contacts.ResolveUsername` через Telethon (`UsernameNotOccupiedError` -> свободен).
-- **Fragment** — парсинг страницы `fragment.com/username/<ник>` (не выставлен ли на аукцион/продажу).
+- **Словарь** — Datamuse API (`sp=?????` по длине, `sp=a?b?c` по маске). Без ключа, до 100k запросов/день.
+- **Telegram** — MTProto (Python) или `t.me` (Cloudflare).
+- **Fragment** — парсинг `fragment.com/username/<ник>`.
 
-## Установка
+## Установка (Python)
 ```bash
 pip install -r requirements.txt
 cp .env.example .env   # заполни BOT_TOKEN, API_ID, API_HASH
@@ -27,9 +31,9 @@ python bot.py
 
 1. Токен бота — у [@BotFather](https://t.me/BotFather)
 2. `API_ID` и `API_HASH` — на https://my.telegram.org
-3. При первом запуске Telethon попросит номер телефона и код (нужен user-аккаунт для проверки ников).
+3. При первом запуске Telethon попросит номер телефона и код.
 
-## \u26A0\uFE0F Важно
-- Telegram ограничивает частоту `ResolveUsername` (FloodWait) — не ставь маленький `CHECK_DELAY`.
+## ⚠️ Важно
+- Telegram ограничивает частоту запросов (FloodWait).
 - Datamuse с 1 января 2027 потребует API-ключ; до этого работает без ключа.
-- Fragment-парсинг зависит от вёрстки сайта; при изменениях поправь ключевые слова в `checker.py`.
+- Fragment/t.me парсинг зависит от вёрстки; при изменениях поправь ключевые слова в `checker`.
