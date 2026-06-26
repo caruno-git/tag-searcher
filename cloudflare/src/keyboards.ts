@@ -9,14 +9,14 @@ export const mainMenu = {
   resize_keyboard: true,
 };
 
-// Шаг 1 — выбор количества символов
+// Шаг 1 — выбор количества символов (в Telegram минимум 5)
 export const lengthMenu = {
   inline_keyboard: [
     [
-      { text: "4", callback_data: "len:4" },
       { text: "5", callback_data: "len:5" },
       { text: "6", callback_data: "len:6" },
       { text: "7", callback_data: "len:7" },
+      { text: "8", callback_data: "len:8" },
     ],
     [
       { text: "🔎 Фильтр", callback_data: "sec:filter" },
@@ -64,7 +64,7 @@ export function continueKb(length: number, source: string, dig: string) {
 export function resultKb(username: string, length: number, source: string, dig: string) {
   return {
     inline_keyboard: [
-      [{ text: "🔗 Открыть", url: `https://t.me/${username}` }],
+      [{ text: "🔗 Открыть", url: `{{https://t.me/${username}}}` }],
       [
         { text: "⏭ Ещё", callback_data: `go:${length}:${source}:${dig}` },
         { text: "✖️ Закрыть", callback_data: "close" },
