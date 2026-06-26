@@ -1,5 +1,5 @@
-import { mainMenu, searchSections, digitsChoice, resultKb } from "./keyboards";
-import { sample, wordsByMask, shuffle } from "./words";
+import { mainMenu, lengthMenu, sourceMenu, digitsMenu, continueKb, resultKb } from "./keyboards";
+import { randBatch, dictBatch, wordsByMask, shuffle } from "./words";
 import { isFree } from "./checker";
 import { liquidity } from "./rating";
 
@@ -9,22 +9,26 @@ export interface Env {
   TRAPS: KVNamespace;
 }
 
-const BATCH = 16;
+// Лимит внешних запросов Cloudflare (free ~50/вызов). Держимся под ним.
+const CHUNK = 12;
+const MAX_CHECKS_RAND = 35; // рандом: 1 запрос на ник
+const MAX_CHECKS_DICT = 16; // словарь: до 2 запросов на ник
 
 const START_TEXT =
   "👁 <b>Tag Searcher</b> — поиск свободных юзернеймов\n\n" +
-  "Ники собираются из <b>реальных слов</b> (Datamuse): составные (darkfox) и слово+цифры.\n\n" +
-  "Каждый ник проверяется:\n" +
-  "• <b>Telegram</b> (t.me) — не занят профилем/каналом/ботом\n" +
-  "• <b>Fragment</b> — не выставлен на аукцион/продажу\n\n" +
-  "♾️ <b>Все функции бесплатны и без лимитов.</b>\n\n" +
-  "Нажми «🔍 ПОИСК», чтобы начать.";
+  "Как работает:\n" +
+  "1️⃣ Выбираешь длину (4–7)\n" +
+  "2️⃣ Словарь 📖 или рандом букв 🎲\n" +
+  "3️⃣ С цифрами или без\n" +
+  "4️⃣ Бот крутит подбор, пока не найдёт свободный ник\n\n" +
+  "Проверка: <b>Telegram</b> (t.me) + <b>Fragment</b>.\n" +
+  "♾ Всё бесплатно и без лимитов.\n\n" +
+  "Нажми «🔍 ПОИСК».";
 
-const SEARCH_TEXT =
-  "💎 <b>ПОИСК ЮЗЕРНЕЙМА</b>\n\n♾️ Попыток: <b>безлимит</b>\n\nВыберите раздел 👇";
+const SEARCH_TEXT = "💎 <b>ПОИСК ЮЗЕРНЕЙМА</b>\n\n♾ Попыток: <b>безлимит</b>\n\nВыбери количество символов 👇";
 
 async function tg(env: Env, method: string, payload: Record<string, unknown>): Promise<any> {
-  const res = await fetch(`{{https://api.telegram.org/bot${env.BOT_TOKEN}}}/${method}`, {
+  const res = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -79,18 +83,18 @@ async function handleMessage(msg: any, env: Env): Promise<void> {
 
   switch (text) {
     case "🔍 ПОИСК":
-      await tg(env, "sendMessage", { chat_id: chatId, parse_mode: "HTML", reply_markup: searchSections, text: SEARCH_TEXT });
+      await tg(env, "sendMessage", { chat_id: chatId, parse_mode: "HTML", reply_markup: lengthMenu, text: SEARCH_TEXT });
       return;
     case "💎 Премиум":
       await tg(env, "sendMessage", { chat_id: chatId, text: "💎 В этой сборке все Premium-функции открыты бесплатно 🎉" });
       return;
     case "👤 Профиль":
-      await tg(env, "sendMessage", { chat_id: chatId, parse_mode: "HTML", text: `👤 <b>Профиль</b>\nID: <code>${msg.from.id}</code>\nСтатус: ♾️ Безлимит` });
+      await tg(env, "sendMessage", { chat_id: chatId, parse_mode: "HTML", text: `👤 <b>Профиль</b>\nID: <code>${msg.from.id}</code>\nСтатус: ♾ Безлимит` });
       return;
     case "👥 Рефералы": {
       const me = await tg(env, "getMe", {});
       const un = me?.result?.username;
-      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\n{{https://t.me/${un}}}?start=ref${msg.from.id}` });
+      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\nhttps://t.me/${un}?start=ref${msg.from.id}` });
       return;
     }
     case "🛟 Поддержка":
@@ -110,16 +114,23 @@ async function handleCallback(cq: any, env: Env): Promise<void> {
   await tg(env, "answerCallbackQuery", { callback_query_id: cq.id });
 
   if (data === "sec:open") {
-    await tg(env, "editMessageText", { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: searchSections, text: SEARCH_TEXT });
+    await tg(env, "editMessageText", { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: lengthMenu, text: SEARCH_TEXT });
     return;
   }
   if (data === "sec:back" || data === "close") {
     await tg(env, "deleteMessage", { chat_id: chatId, message_id: messageId });
     return;
   }
-  if (data === "sec:5" || data === "sec:6") {
+  if (data.startsWith("len:")) {
     const length = parseInt(data.split(":")[1], 10);
-    await tg(env, "editMessageText", { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: digitsChoice(length), text: `💎 Раздел: <b>${length} букв</b>\n\nНайти ник с цифрами или без?` });
+    await tg(env, "editMessageText", { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: sourceMenu(length), text: `Длина: <b>${length}</b>\n\nОткуда брать ники?` });
+    return;
+  }
+  if (data.startsWith("src:")) {
+    const [, len, source] = data.split(":");
+    const length = parseInt(len, 10);
+    const label = source === "rand" ? "🎲 рандом букв" : "📖 словарь";
+    await tg(env, "editMessageText", { chat_id: chatId, message_id: messageId, parse_mode: "HTML", reply_markup: digitsMenu(length, source), text: `Длина: <b>${length}</b> · ${label}\n\nС цифрами или без?` });
     return;
   }
   if (data === "sec:filter") {
@@ -131,24 +142,11 @@ async function handleCallback(cq: any, env: Env): Promise<void> {
     return;
   }
   if (data.startsWith("go:")) {
-    const parts = data.split(":");
-    let length: number;
-    let withDigits: boolean;
-    if (parts[1] === "again") {
-      length = 6;
-      withDigits = false;
-    } else {
-      length = parseInt(parts[1], 10);
-      withDigits = parts[2] === "dig";
-    }
-    const status = await tg(env, "sendMessage", { chat_id: chatId, text: "⏳ Подбираю слова и проверяю Telegram + Fragment…" });
-    const mid = status?.result?.message_id;
-    const candidates = await sample(length, BATCH, withDigits);
-    if (!candidates.length) {
-      await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: "⚠️ Не удалось получить слова. Попробуй позже." });
-      return;
-    }
-    await runSearch(env, chatId, mid, candidates);
+    const [, len, source, digFlag] = data.split(":");
+    const length = parseInt(len, 10);
+    const withDigits = digFlag === "dig";
+    const status = await tg(env, "sendMessage", { chat_id: chatId, text: "⏳ Кручу подбор и проверяю Telegram…" });
+    await runSearch(env, chatId, status?.result?.message_id, length, source, withDigits);
   }
 }
 
@@ -158,23 +156,41 @@ async function handleMask(mask: string, chatId: number, env: Env): Promise<void>
     await tg(env, "sendMessage", { chat_id: chatId, text: "😕 По этой маске реальных слов не нашлось." });
     return;
   }
-  candidates = shuffle(candidates).slice(0, BATCH);
+  candidates = shuffle(candidates).slice(0, MAX_CHECKS_DICT);
   const status = await tg(env, "sendMessage", { chat_id: chatId, text: "⏳ Проверяю реальные слова по маске…" });
-  await runSearch(env, chatId, status?.result?.message_id, candidates);
+  await runLoop(env, chatId, status?.result?.message_id, candidates, mask.length, "dict", false, true);
 }
 
-async function runSearch(env: Env, chatId: number, messageId: number, candidates: string[]): Promise<void> {
+// Поиск по выбранным параметрам (длина/источник/цифры) пачками, пока не найдёт.
+async function runSearch(env: Env, chatId: number, messageId: number, length: number, source: string, withDigits: boolean): Promise<void> {
+  const isRand = source === "rand";
+  const maxChecks = isRand ? MAX_CHECKS_RAND : MAX_CHECKS_DICT;
+  const candidates: string[] = [];
+  while (candidates.length < maxChecks) {
+    const batch = isRand ? randBatch(length, withDigits, CHUNK) : await dictBatch(length, withDigits, CHUNK);
+    if (!batch.length) break;
+    for (const c of batch) {
+      if (candidates.length >= maxChecks) break;
+      if (!candidates.includes(c)) candidates.push(c);
+    }
+    if (!isRand && batch.length < CHUNK) break; // словарь исчерпан
+  }
+  await runLoop(env, chatId, messageId, candidates, length, source, withDigits, !isRand);
+}
+
+async function runLoop(env: Env, chatId: number, messageId: number, candidates: string[], length: number, source: string, withDigits: boolean, deepFragment: boolean): Promise<void> {
+  const dig = withDigits ? "dig" : "nodig";
   let found: string | null = null;
   for (let i = 0; i < candidates.length; i++) {
-    if (i % 3 === 0) {
+    if (i === 0 || i % 8 === 0) {
       await tg(env, "editMessageText", {
         chat_id: chatId,
         message_id: messageId,
         parse_mode: "HTML",
-        text: `⏳ Проверяю: <code>@${candidates[i]}</code>\nTelegram + Fragment…\nПрогресс: ${i + 1}/${candidates.length}`,
+        text: `⏳ Проверяю: <code>@${candidates[i]}</code>\nПрогресс: ${i + 1}/${candidates.length}`,
       });
     }
-    if (await isFree(candidates[i])) {
+    if (await isFree(candidates[i], deepFragment)) {
       found = candidates[i];
       break;
     }
@@ -182,20 +198,21 @@ async function runSearch(env: Env, chatId: number, messageId: number, candidates
 
   if (found) {
     const [score, label] = liquidity(found);
+    const srcLabel = source === "rand" ? "случайные буквы" : "реальные слова";
     await tg(env, "editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: "HTML",
-      reply_markup: resultKb(found),
-      text: `✅ <b>НИК НАЙДЕН!</b>\n\n┌ <code>@${found}</code>\n└ реальные слова · ${found.length} симв.\n\n├ Ликвидность — ${score}/10\n├ Оценка — ${label}\n└ ⚡ Свободен`,
+      reply_markup: resultKb(found, length, source, dig),
+      text: `✅ <b>НИК НАЙДЕН!</b>\n\n┌ <code>@${found}</code>\n└ ${srcLabel} · ${found.length} симв.\n\n├ Ликвидность — ${score}/10\n├ Оценка — ${label}\n└ ⚡ Свободен`,
     });
   } else {
     await tg(env, "editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: "HTML",
-      reply_markup: digitsChoice(6),
-      text: "😕 В этой партии свободных не нашлось.\nЖми «С цифрами» — там свободных гораздо больше 👇",
+      reply_markup: continueKb(length, source, dig),
+      text: `😕 За ${candidates.length} проверок свободного не нашлось.\nНажми «🔄 Продолжить поиск» — проверю следующую партию 👇`,
     });
   }
 }

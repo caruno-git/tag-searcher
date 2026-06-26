@@ -9,11 +9,14 @@ export const mainMenu = {
   resize_keyboard: true,
 };
 
-export const searchSections = {
+// Шаг 1 — выбор количества символов
+export const lengthMenu = {
   inline_keyboard: [
     [
-      { text: "5 букв", callback_data: "sec:5" },
-      { text: "6 букв", callback_data: "sec:6" },
+      { text: "4", callback_data: "len:4" },
+      { text: "5", callback_data: "len:5" },
+      { text: "6", callback_data: "len:6" },
+      { text: "7", callback_data: "len:7" },
     ],
     [
       { text: "🔎 Фильтр", callback_data: "sec:filter" },
@@ -23,24 +26,47 @@ export const searchSections = {
   ],
 };
 
-export function digitsChoice(length: number) {
+// Шаг 2 — словарь или рандом букв
+export function sourceMenu(length: number) {
   return {
     inline_keyboard: [
       [
-        { text: "Без цифр", callback_data: `go:${length}:nodig` },
-        { text: "🔢 С цифрами", callback_data: `go:${length}:dig` },
+        { text: "📖 Словарь", callback_data: `src:${length}:dict` },
+        { text: "🎲 Рандом букв", callback_data: `src:${length}:rand` },
       ],
       [{ text: "↩️ Назад", callback_data: "sec:open" }],
     ],
   };
 }
 
-export function resultKb(username: string) {
+// Шаг 3 — с цифрами или без
+export function digitsMenu(length: number, source: string) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Без цифр", callback_data: `go:${length}:${source}:nodig` },
+        { text: "🔢 С цифрами", callback_data: `go:${length}:${source}:dig` },
+      ],
+      [{ text: "↩️ Назад", callback_data: `len:${length}` }],
+    ],
+  };
+}
+
+export function continueKb(length: number, source: string, dig: string) {
+  return {
+    inline_keyboard: [
+      [{ text: "🔄 Продолжить поиск", callback_data: `go:${length}:${source}:${dig}` }],
+      [{ text: "↩️ В меню", callback_data: "sec:open" }],
+    ],
+  };
+}
+
+export function resultKb(username: string, length: number, source: string, dig: string) {
   return {
     inline_keyboard: [
       [{ text: "🔗 Открыть", url: `https://t.me/${username}` }],
       [
-        { text: "⏭ Пропустить", callback_data: "go:again" },
+        { text: "⏭ Ещё", callback_data: `go:${length}:${source}:${dig}` },
         { text: "✖️ Закрыть", callback_data: "close" },
       ],
     ],
