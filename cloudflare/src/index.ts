@@ -9,6 +9,9 @@ export interface Env {
   TRAPS: KVNamespace;
 }
 
+const API = "https://api.telegram.org/bot";
+const TME = "https://t.me/";
+
 // За один круг (держимся под лимитом запросов Cloudflare ~50/вызов).
 const PER_ROUND_RAND = 40;
 const PER_ROUND_DICT = 36;
@@ -40,7 +43,7 @@ const SEARCH_TEXT = "💎 <b>ПОИСК ЮЗЕРНЕЙМА</b>\n\n♾ Попыт
 
 async function tg(env: Env, method: string, payload: Record<string, unknown>): Promise<any> {
   try {
-    const res = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+    const res = await fetch(API + env.BOT_TOKEN + "/" + method, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -124,7 +127,7 @@ async function handleMessage(msg: any, env: Env, origin: string): Promise<void> 
     case "👥 Рефералы": {
       const me = await tg(env, "getMe", {});
       const un = me?.result?.username;
-      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\nhttps://t.me/${un}?start=ref${msg.from.id}` });
+      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\n${TME}${un}?start=ref${msg.from.id}` });
       return;
     }
     case "🛟 Поддержка":

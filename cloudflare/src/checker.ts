@@ -3,10 +3,12 @@
 //   2) Fragment — выставлен ли на продажу/аукцион (только для глубокой проверки)
 
 const UA = "Mozilla/5.0 (compatible; tag-searcher/1.0)";
+const TME = "https://t.me/";
+const FRAGMENT = "https://fragment.com/username/";
 
 export async function checkTelegram(username: string): Promise<"free" | "taken"> {
   try {
-    const res = await fetch(`https://t.me/${username}`, { headers: { "User-Agent": UA } });
+    const res = await fetch(TME + username, { headers: { "User-Agent": UA } });
     if (res.status === 404) return "free";
     const html = await res.text();
     // Эти классы рендерятся только когда есть реальный аккаунт.
@@ -22,7 +24,7 @@ export async function checkTelegram(username: string): Promise<"free" | "taken">
 
 export async function checkFragment(username: string): Promise<"free" | "sale" | "taken"> {
   try {
-    const res = await fetch(`https://fragment.com/username/${username}`, { headers: { "User-Agent": UA } });
+    const res = await fetch(FRAGMENT + username, { headers: { "User-Agent": UA } });
     const html = (await res.text()).toLowerCase();
     if (/(for sale|on auction|place a bid|buy now|highest bid)/.test(html)) return "sale";
     if (/(taken|sold|unavailable)/.test(html)) return "taken";

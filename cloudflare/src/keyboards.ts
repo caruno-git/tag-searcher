@@ -1,5 +1,7 @@
 // Клавиатуры в формате Telegram Bot API (reply_markup)
 
+const TME = "https://t.me/";
+
 export const mainMenu = {
   keyboard: [
     [{ text: "🔍 ПОИСК" }, { text: "💎 Премиум" }],
@@ -64,7 +66,7 @@ export function continueKb(length: number, source: string, dig: string) {
 export function resultKb(username: string, length: number, source: string, dig: string) {
   return {
     inline_keyboard: [
-      [{ text: "🔗 Открыть", url: `https://t.me/${username}` }],
+      [{ text: "🔗 Открыть", url: TME + username }],
       [
         { text: "⏭ Ещё", callback_data: `go:${length}:${source}:${dig}` },
         { text: "✖️ Закрыть", callback_data: "close" },
