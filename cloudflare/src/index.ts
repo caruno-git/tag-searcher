@@ -14,7 +14,7 @@ const TME = "https://t.me/";
 
 // За один круг (держимся под лимитом запросов Cloudflare ~50/вызов).
 const PER_ROUND_RAND = 40;
-const PER_ROUND_DICT = 36;
+const PER_ROUND_DICT = 30;
 const CHUNK = 10; // параллельных проверок за раз
 const MAX_ROUNDS = 40; // предохранитель от бесконечного цикла
 
@@ -190,7 +190,7 @@ async function handleCallback(cq: any, env: Env, origin: string): Promise<void> 
   }
 }
 
-// Один круг автопоиска — проверяем пачками параллельно.
+// Один круг автопоиска — проверяем пачками, показывая живой прогресс.
 async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
   const isRand = job.source === "rand";
   const deep = !isRand;
@@ -199,16 +199,24 @@ async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
     ? randBatch(job.length, job.withDigits, perRound)
     : await dictBatch(job.length, job.withDigits, perRound);
 
+  const srcLabel = isRand ? "🎲 рандом" : "📖 словарь";
   let found: string | null = null;
   let localChecked = 0;
   let last = "";
   for (let i = 0; i < batch.length && !found; i += CHUNK) {
     const slice = batch.slice(i, i + CHUNK);
+    last = slice[slice.length - 1];
+    // Живой показ: какой ник сейчас проверяем.
+    await tg(env, "editMessageText", {
+      chat_id: job.chatId,
+      message_id: job.messageId,
+      parse_mode: "HTML",
+      text: `🔎 <b>Автопоиск</b> · ${srcLabel}\n\n⏳ Проверяю: <code>@${last}</code>\nПроверено: <b>${job.checked + i}</b>`,
+    });
     const results = await Promise.all(
       slice.map(async (c) => ({ c, free: await isFree(c, deep) })),
     );
     localChecked += slice.length;
-    last = slice[slice.length - 1];
     const hit = results.find((r) => r.free);
     if (hit) found = hit.c;
   }
@@ -222,12 +230,6 @@ async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
   const dig = job.withDigits ? "dig" : "nodig";
 
   if (job.attempt < MAX_ROUNDS && batch.length > 0) {
-    await tg(env, "editMessageText", {
-      chat_id: job.chatId,
-      message_id: job.messageId,
-      parse_mode: "HTML",
-      text: `🔎 Автопоиск…\nПроверено: <b>${total}</b>\nПоследний: <code>@${last}</code>`,
-    });
     const next: Job = { ...job, attempt: job.attempt + 1, checked: total };
     let chained = false;
     try {
