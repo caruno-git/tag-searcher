@@ -7,6 +7,7 @@ export interface Env {
   BOT_TOKEN: string;
   WEBHOOK_SECRET?: string;
   TRAPS: KVNamespace;
+  SELF: Fetcher; // service binding на самого себя
 }
 
 const API = "https://api.telegram.org/bot";
@@ -16,7 +17,7 @@ const TME = "https://t.me/";
 const PER_ROUND_RAND = 40;
 const PER_ROUND_DICT = 30;
 const CHUNK = 10; // параллельных проверок за раз
-const MAX_ROUNDS = 40; // предохранитель от бесконечного цикла
+const MAX_ROUNDS = 60; // предохранитель от бесконечного цикла
 
 type Job = {
   chatId: number;
@@ -60,7 +61,7 @@ export default {
     if (req.method === "GET") return new Response("tag-searcher worker OK");
     if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-    // Внутреннее продолжение поиска.
+    // Внутреннее продолжение поиска (вызывается через env.SELF).
     if (url.pathname === "/__continue") {
       if ((req.headers.get("x-internal-secret") ?? "") !== (env.WEBHOOK_SECRET ?? "")) {
         return new Response("forbidden", { status: 403 });
@@ -71,7 +72,7 @@ export default {
       } catch (_) {
         return new Response("bad request", { status: 400 });
       }
-      ctx.waitUntil(searchRound(env, job, url.origin).catch((e) => console.error("round", e)));
+      ctx.waitUntil(searchRound(env, job).catch((e) => console.error("round", e)));
       return new Response("OK");
     }
 
@@ -86,7 +87,7 @@ export default {
     } catch (_) {
       return new Response("bad request", { status: 400 });
     }
-    ctx.waitUntil(handleUpdate(update, env, url.origin).catch((e) => console.error("update", e)));
+    ctx.waitUntil(handleUpdate(update, env).catch((e) => console.error("update", e)));
     return new Response("OK");
   },
 
@@ -95,12 +96,12 @@ export default {
   },
 };
 
-async function handleUpdate(update: any, env: Env, origin: string): Promise<void> {
-  if (update.message) return handleMessage(update.message, env, origin);
-  if (update.callback_query) return handleCallback(update.callback_query, env, origin);
+async function handleUpdate(update: any, env: Env): Promise<void> {
+  if (update.message) return handleMessage(update.message, env);
+  if (update.callback_query) return handleCallback(update.callback_query, env);
 }
 
-async function handleMessage(msg: any, env: Env, origin: string): Promise<void> {
+async function handleMessage(msg: any, env: Env): Promise<void> {
   const chatId = msg.chat.id;
   const text: string = (msg.text || "").trim();
   if (!text) return;
@@ -140,7 +141,7 @@ async function handleMessage(msg: any, env: Env, origin: string): Promise<void> 
   }
 }
 
-async function handleCallback(cq: any, env: Env, origin: string): Promise<void> {
+async function handleCallback(cq: any, env: Env): Promise<void> {
   const data: string = cq.data || "";
   const chatId = cq.message.chat.id;
   const messageId = cq.message.message_id;
@@ -186,12 +187,12 @@ async function handleCallback(cq: any, env: Env, origin: string): Promise<void> 
       attempt: 1,
       checked: 0,
     };
-    if (job.messageId) await searchRound(env, job, origin);
+    if (job.messageId) await searchRound(env, job);
   }
 }
 
 // Один круг автопоиска — проверяем пачками, показывая живой прогресс.
-async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
+async function searchRound(env: Env, job: Job): Promise<void> {
   const isRand = job.source === "rand";
   const deep = !isRand;
   const perRound = isRand ? PER_ROUND_RAND : PER_ROUND_DICT;
@@ -206,7 +207,6 @@ async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
   for (let i = 0; i < batch.length && !found; i += CHUNK) {
     const slice = batch.slice(i, i + CHUNK);
     last = slice[slice.length - 1];
-    // Живой показ: какой ник сейчас проверяем.
     await tg(env, "editMessageText", {
       chat_id: job.chatId,
       message_id: job.messageId,
@@ -233,11 +233,13 @@ async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
     const next: Job = { ...job, attempt: job.attempt + 1, checked: total };
     let chained = false;
     try {
-      const r = await fetch(`${origin}/__continue`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-internal-secret": env.WEBHOOK_SECRET ?? "" },
-        body: JSON.stringify(next),
-      });
+      const r = await env.SELF.fetch(
+        new Request("https://self/__continue", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-internal-secret": env.WEBHOOK_SECRET ?? "" },
+          body: JSON.stringify(next),
+        }),
+      );
       chained = r.ok;
     } catch (_) {
       chained = false;

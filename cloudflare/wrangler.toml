@@ -7,6 +7,12 @@ compatibility_date = "2024-09-23"
 binding = "TRAPS"
 id = "a848abd92dd64ce8ab1de6f850586e27"
 
+# Service binding на самого себя — чтобы воркер мог запускать следующий круг поиска
+# как новый запуск со свежим лимитом запросов (обход ошибки 1042).
+[[services]]
+binding = "SELF"
+service = "tag-searcher"
+
 # Cron: проверяем ловушки каждые 2 минуты
 [triggers]
 crons = ["*/2 * * * *"]
