@@ -9,11 +9,11 @@ export interface Env {
   TRAPS: KVNamespace;
 }
 
-const BATCH = 12;
+const BATCH = 16;
 
 const START_TEXT =
   "👁 <b>Tag Searcher</b> — поиск свободных юзернеймов\n\n" +
-  "Ники подбираются из <b>реальных словарных слов</b> (Datamuse).\n\n" +
+  "Ники собираются из <b>реальных слов</b> (Datamuse): составные (darkfox) и слово+цифры.\n\n" +
   "Каждый ник проверяется:\n" +
   "• <b>Telegram</b> (t.me) — не занят профилем/каналом/ботом\n" +
   "• <b>Fragment</b> — не выставлен на аукцион/продажу\n\n" +
@@ -24,7 +24,7 @@ const SEARCH_TEXT =
   "💎 <b>ПОИСК ЮЗЕРНЕЙМА</b>\n\n♾️ Попыток: <b>безлимит</b>\n\nВыберите раздел 👇";
 
 async function tg(env: Env, method: string, payload: Record<string, unknown>): Promise<any> {
-  const res = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+  const res = await fetch(`{{https://api.telegram.org/bot${env.BOT_TOKEN}}}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -90,7 +90,7 @@ async function handleMessage(msg: any, env: Env): Promise<void> {
     case "👥 Рефералы": {
       const me = await tg(env, "getMe", {});
       const un = me?.result?.username;
-      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\nhttps://t.me/${un}?start=ref${msg.from.id}` });
+      await tg(env, "sendMessage", { chat_id: chatId, text: `👥 Твоя реферальная ссылка:\n{{https://t.me/${un}}}?start=ref${msg.from.id}` });
       return;
     }
     case "🛟 Поддержка":
@@ -148,7 +148,7 @@ async function handleCallback(cq: any, env: Env): Promise<void> {
       await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: "⚠️ Не удалось получить слова. Попробуй позже." });
       return;
     }
-    await runSearch(env, chatId, mid, candidates, length);
+    await runSearch(env, chatId, mid, candidates);
   }
 }
 
@@ -160,18 +160,20 @@ async function handleMask(mask: string, chatId: number, env: Env): Promise<void>
   }
   candidates = shuffle(candidates).slice(0, BATCH);
   const status = await tg(env, "sendMessage", { chat_id: chatId, text: "⏳ Проверяю реальные слова по маске…" });
-  await runSearch(env, chatId, status?.result?.message_id, candidates, mask.length);
+  await runSearch(env, chatId, status?.result?.message_id, candidates);
 }
 
-async function runSearch(env: Env, chatId: number, messageId: number, candidates: string[], length: number): Promise<void> {
+async function runSearch(env: Env, chatId: number, messageId: number, candidates: string[]): Promise<void> {
   let found: string | null = null;
   for (let i = 0; i < candidates.length; i++) {
-    await tg(env, "editMessageText", {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: "HTML",
-      text: `⏳ Проверяю: <code>@${candidates[i]}</code>\nTelegram + Fragment…\nПрогресс: ${i + 1}/${candidates.length}`,
-    });
+    if (i % 3 === 0) {
+      await tg(env, "editMessageText", {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+        text: `⏳ Проверяю: <code>@${candidates[i]}</code>\nTelegram + Fragment…\nПрогресс: ${i + 1}/${candidates.length}`,
+      });
+    }
     if (await isFree(candidates[i])) {
       found = candidates[i];
       break;
@@ -185,15 +187,15 @@ async function runSearch(env: Env, chatId: number, messageId: number, candidates
       message_id: messageId,
       parse_mode: "HTML",
       reply_markup: resultKb(found),
-      text: `✅ <b>НИК НАЙДЕН!</b>\n\n┌ <code>@${found}</code>\n└ ${found.length} букв · реальное слово\n\n├ Ликвидность — ${score}/10\n├ Оценка — ${label}\n└ ⚡ Свободен`,
+      text: `✅ <b>НИК НАЙДЕН!</b>\n\n┌ <code>@${found}</code>\n└ реальные слова · ${found.length} симв.\n\n├ Ликвидность — ${score}/10\n├ Оценка — ${label}\n└ ⚡ Свободен`,
     });
   } else {
     await tg(env, "editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: "HTML",
-      reply_markup: digitsChoice(length),
-      text: "😕 Свободных ников в этой партии не нашлось.\nПопробуй ещё раз 👇",
+      reply_markup: digitsChoice(6),
+      text: "😕 В этой партии свободных не нашлось.\nЖми «С цифрами» — там свободных гораздо больше 👇",
     });
   }
 }
