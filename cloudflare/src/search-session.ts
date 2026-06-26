@@ -3,6 +3,8 @@
 // изначальную сессию — после этого цепочка падает. Durable Object + Alarms лишён этого
 // ограничения: объект делает порцию проверок, ставит себе будильник и просыпается снова.
 // У alarm'ов гарантия выполнения (at-least-once) и авто-ретраи.
+// Каждый поиск — свой отдельный объект (ключ чат:сообщение), поэтому параллельные
+// поиски не делят состояние и не мешают друг другу.
 
 import { DurableObject } from "cloudflare:workers";
 import { randBatch, dictBatch } from "./words";
@@ -69,18 +71,21 @@ export class SearchSession extends DurableObject<DoEnv> {
       : await dictBatch(job.length, job.withDigits, perRound);
 
     const srcLabel = isRand ? "🎲 рандом" : "📖 словарь";
-    let found: string | null = null;
-    let localChecked = 0;
-    let last = "";
-    for (let i = 0; i < batch.length && !found; i += CHUNK) {
-      const slice = batch.slice(i, i + CHUNK);
-      last = slice[slice.length - 1];
+
+    // ОДИН апдейт прогресса на круг — чтобы не ловить Telegram 429 при параллельных поисках.
+    if (batch.length > 0) {
       await tg(token, "editMessageText", {
         chat_id: job.chatId,
         message_id: job.messageId,
         parse_mode: "HTML",
-        text: `🔎 <b>Автопоиск</b> · ${srcLabel}\n\n⏳ Проверяю: <code>@${last}</code>\nПроверено: <b>${job.checked + i}</b>`,
+        text: `🔎 <b>Автопоиск</b> · ${srcLabel}\n\n⏳ Проверяю партию: <code>@${batch[0]}</code> …\nВсего проверено: <b>${job.checked}</b>`,
       });
+    }
+
+    let found: string | null = null;
+    let localChecked = 0;
+    for (let i = 0; i < batch.length && !found; i += CHUNK) {
+      const slice = batch.slice(i, i + CHUNK);
       const results = await Promise.all(
         slice.map(async (c) => ({ c, free: await isFree(c, deep) })),
       );
