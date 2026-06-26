@@ -13,11 +13,12 @@ export interface Env {
 const API = "https://api.telegram.org/bot";
 const TME = "https://t.me/";
 
-// За один круг (держимся под лимитом запросов Cloudflare ~50/вызов).
-const PER_ROUND_RAND = 40;
-const PER_ROUND_DICT = 30;
-const CHUNK = 10; // параллельных проверок за раз
-const MAX_ROUNDS = 60; // предохранитель от бесконечного цикла
+// Лимит Cloudflare — 50 сетевых запросов на один запуск.
+// Словарь = 2 запроса/ник (t.me + Fragment), рандом = 1. Держим круг под ~44.
+const PER_ROUND_RAND = 36; // 36 + ~6 обновлений + 1 самозапуск ≈ 43
+const PER_ROUND_DICT = 18; // 1 слова + 18×2 + ~3 + 1 ≈ 41
+const CHUNK = 6; // параллельных проверок за раз
+const MAX_ROUNDS = 80; // предохранитель от бесконечного цикла
 
 type Job = {
   chatId: number;
