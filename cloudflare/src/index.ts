@@ -9,9 +9,10 @@ export interface Env {
   TRAPS: KVNamespace;
 }
 
-// Проверок за один круг (держимся под лимитом запросов Cloudflare ~50/вызов).
-const PER_ROUND_RAND = 30; // 1 запрос на ник
-const PER_ROUND_DICT = 14; // до 2 запросов на ник
+// За один круг (держимся под лимитом запросов Cloudflare ~50/вызов).
+const PER_ROUND_RAND = 40;
+const PER_ROUND_DICT = 36;
+const CHUNK = 10; // параллельных проверок за раз
 const MAX_ROUNDS = 40; // предохранитель от бесконечного цикла
 
 type Job = {
@@ -30,7 +31,7 @@ const START_TEXT =
   "1️⃣ Выбираешь длину (5–8)\n" +
   "2️⃣ Словарь 📖 или рандом букв 🎲\n" +
   "3️⃣ С цифрами или без\n" +
-  "4️⃣ Бот САМ ищет без остановки, пока не найдёт свободный ник\n\n" +
+  "4️⃣ Бот САМ ищет пока не найдёт свободный ник\n\n" +
   "Проверка: <b>Telegram</b> (t.me) + <b>Fragment</b>.\n" +
   "♾ Всё бесплатно и без лимитов.\n\n" +
   "Нажми «🔍 ПОИСК».";
@@ -38,12 +39,16 @@ const START_TEXT =
 const SEARCH_TEXT = "💎 <b>ПОИСК ЮЗЕРНЕЙМА</b>\n\n♾ Попыток: <b>безлимит</b>\n\nВыбери количество символов 👇";
 
 async function tg(env: Env, method: string, payload: Record<string, unknown>): Promise<any> {
-  const res = await fetch(`{{https://api.telegram.org/bot${env.BOT_TOKEN}}}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  return res.json();
+  try {
+    const res = await fetch(`{{https://api.telegram.org/bot${env.BOT_TOKEN}}}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch (_) {
+    return null;
+  }
 }
 
 export default {
@@ -52,7 +57,7 @@ export default {
     if (req.method === "GET") return new Response("tag-searcher worker OK");
     if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-    // Внутреннее продолжение поиска (воркер дёргает сам себя).
+    // Внутреннее продолжение поиска.
     if (url.pathname === "/__continue") {
       if ((req.headers.get("x-internal-secret") ?? "") !== (env.WEBHOOK_SECRET ?? "")) {
         return new Response("forbidden", { status: 403 });
@@ -63,7 +68,7 @@ export default {
       } catch (_) {
         return new Response("bad request", { status: 400 });
       }
-      ctx.waitUntil(searchRound(env, job, url.origin).catch((e) => console.error(e)));
+      ctx.waitUntil(searchRound(env, job, url.origin).catch((e) => console.error("round", e)));
       return new Response("OK");
     }
 
@@ -78,12 +83,12 @@ export default {
     } catch (_) {
       return new Response("bad request", { status: 400 });
     }
-    ctx.waitUntil(handleUpdate(update, env, url.origin).catch((e) => console.error(e)));
+    ctx.waitUntil(handleUpdate(update, env, url.origin).catch((e) => console.error("update", e)));
     return new Response("OK");
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(checkTraps(env));
+    ctx.waitUntil(checkTraps(env).catch((e) => console.error("cron", e)));
   },
 };
 
@@ -178,11 +183,11 @@ async function handleCallback(cq: any, env: Env, origin: string): Promise<void> 
       attempt: 1,
       checked: 0,
     };
-    await searchRound(env, job, origin);
+    if (job.messageId) await searchRound(env, job, origin);
   }
 }
 
-// Один круг автопоиска. Если не нашёл — дёргает следующий круг через /__continue.
+// Один круг автопоиска — проверяем пачками параллельно.
 async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
   const isRand = job.source === "rand";
   const deep = !isRand;
@@ -194,13 +199,15 @@ async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
   let found: string | null = null;
   let localChecked = 0;
   let last = "";
-  for (const c of batch) {
-    localChecked++;
-    last = c;
-    if (await isFree(c, deep)) {
-      found = c;
-      break;
-    }
+  for (let i = 0; i < batch.length && !found; i += CHUNK) {
+    const slice = batch.slice(i, i + CHUNK);
+    const results = await Promise.all(
+      slice.map(async (c) => ({ c, free: await isFree(c, deep) })),
+    );
+    localChecked += slice.length;
+    last = slice[slice.length - 1];
+    const hit = results.find((r) => r.free);
+    if (hit) found = hit.c;
   }
   const total = job.checked + localChecked;
 
@@ -209,25 +216,40 @@ async function searchRound(env: Env, job: Job, origin: string): Promise<void> {
     return;
   }
 
+  const dig = job.withDigits ? "dig" : "nodig";
+
   if (job.attempt < MAX_ROUNDS && batch.length > 0) {
-    // Показываем живой прогресс и запускаем следующий круг.
     await tg(env, "editMessageText", {
       chat_id: job.chatId,
       message_id: job.messageId,
       parse_mode: "HTML",
       text: `🔎 Автопоиск…\nПроверено: <b>${total}</b>\nПоследний: <code>@${last}</code>`,
     });
+    // Пытаемся продолжить автоматически; если самовызов недоступен — покажем кнопку.
     const next: Job = { ...job, attempt: job.attempt + 1, checked: total };
-    await fetch(`${origin}/__continue`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-internal-secret": env.WEBHOOK_SECRET ?? "" },
-      body: JSON.stringify(next),
-    });
+    let chained = false;
+    try {
+      const r = await fetch(`${origin}/__continue`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-internal-secret": env.WEBHOOK_SECRET ?? "" },
+        body: JSON.stringify(next),
+      });
+      chained = r.ok;
+    } catch (_) {
+      chained = false;
+    }
+    if (!chained) {
+      await tg(env, "editMessageText", {
+        chat_id: job.chatId,
+        message_id: job.messageId,
+        parse_mode: "HTML",
+        reply_markup: continueKb(job.length, job.source, dig),
+        text: `🔎 Проверено ${total} — свободных пока нет.\nЖми, чтобы продолжить 👇`,
+      });
+    }
     return;
   }
 
-  // Достигли потолка автопоиска.
-  const dig = job.withDigits ? "dig" : "nodig";
   await tg(env, "editMessageText", {
     chat_id: job.chatId,
     message_id: job.messageId,
@@ -250,7 +272,6 @@ async function finalizeFound(env: Env, job: Job, found: string): Promise<void> {
   });
 }
 
-// Поиск по маске — конечный список реальных слов, один проход.
 async function handleMask(mask: string, chatId: number, env: Env): Promise<void> {
   let candidates = await wordsByMask(mask);
   if (!candidates.length) {
@@ -261,11 +282,11 @@ async function handleMask(mask: string, chatId: number, env: Env): Promise<void>
   const status = await tg(env, "sendMessage", { chat_id: chatId, text: "⏳ Проверяю слова по маске…" });
   const messageId = status?.result?.message_id;
   let found: string | null = null;
-  for (const c of candidates) {
-    if (await isFree(c, true)) {
-      found = c;
-      break;
-    }
+  for (let i = 0; i < candidates.length && !found; i += CHUNK) {
+    const slice = candidates.slice(i, i + CHUNK);
+    const results = await Promise.all(slice.map(async (c) => ({ c, free: await isFree(c, true) })));
+    const hit = results.find((r) => r.free);
+    if (hit) found = hit.c;
   }
   if (found) {
     const [score, label] = liquidity(found);
